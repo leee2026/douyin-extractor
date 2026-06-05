@@ -625,18 +625,25 @@ function pickFirst(arr, index = 0) {
 }
 
 function getBestVideoUrl(video) {
-  const sources = [
-    video.download_addr,
-    video.downloadAddr,
-    video.play_addr_h264,
-    video.playAddrH264,
-    video.play_addr_265,
-    video.play_addr,
-    video.playAddr,
-  ];
-  for (const src of sources) {
-    const url = pickFirst(src?.url_list) || pickFirst(src?.urlList);
-    if (url) return url.replace(/watermark=1/gi, "watermark=0");
+  // 策略1：用 video_id 拼接 snssdk 播放接口（最可靠的无水印方案）
+  const uri = video.play_addr?.uri || video.playAddr?.uri || "";
+  const vid = uri.replace(/^vid:\/\//i, "");
+  if (vid) {
+    // 这个接口返回 302 重定向到无水印原始视频文件
+    return `https://aweme.snssdk.com/aweme/v1/play/?video_id=${vid}&ratio=1080p&line=0`;
   }
-  throw new Error("无可用视频地址");
+
+  // 策略2：download_addr（下载地址，通常无水印）
+  const dlUrl = pickFirst(video.download_addr?.url_list) || pickFirst(video.downloadAddr?.urlList);
+  if (dlUrl) return dlUrl.replace(/watermark=1/gi, "watermark=0");
+
+  // 策略3：play_addr（尝试去除水印参数）
+  const playUrl = pickFirst(video.play_addr?.url_list) || pickFirst(video.playAddr?.urlList);
+  if (playUrl) return playUrl.replace(/watermark=1/gi, "watermark=0");
+
+  // 策略4：play_addr_h264
+  const h264Url = pickFirst(video.play_addr_h264?.url_list) || pickFirst(video.playAddrH264?.urlList);
+  if (h264Url) return h264Url.replace(/watermark=1/gi, "watermark=0");
+
+  throw new Error("无可用视频地址（play_addr.uri 缺失）");
 }
