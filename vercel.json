@@ -1,8 +1,8 @@
 {
   "functions": {
     "api/parse.js": {
-      "maxDuration": 10,
-      "memory": 512
+      "maxDuration": 30,
+      "memory": 1024
     }
   },
   "headers": [
