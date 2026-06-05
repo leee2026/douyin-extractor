@@ -1,0 +1,13 @@
+{
+  "name": "douyin-watermark-remover",
+  "version": "1.0.0",
+  "description": "抖音无水印视频/图片提取工具 - 手机网页版",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  },
+  "keywords": ["douyin", "watermark", "video", "download"],
+  "license": "MIT",
+  "dependencies": {}
+}
