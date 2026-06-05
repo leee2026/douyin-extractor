@@ -474,28 +474,64 @@ async function strategyDouyinPage(awemeId, logs) {
   throw new Error("douyin 页面中未找到视频数据");
 }
 
-// 标准化不同格式的数据
-function normalizeDetailData(detail) {
-  if (detail.video || detail.images) return detail;
-  if (detail.aweme_detail) return detail.aweme_detail;
-  if (detail.videoInfo) {
-    return {
-      aweme_id: detail.aweme_id,
-      desc: detail.desc,
-      author: detail.author || detail.author_info,
-      statistics: detail.statistics,
-      video: detail.videoInfo,
-      images: detail.images,
-      music: detail.music,
-    };
+// 标准化不同格式的数据 + 深度搜索
+function normalizeDetailData(detail, depth = 0) {
+  if (!detail || typeof detail !== "object" || depth > 8) return detail;
+
+  // 直接匹配：有 aweme_id + video 或 images
+  if (detail.aweme_id && (detail.video || detail.images)) return detail;
+
+  // 常见嵌套路径（优先级从高到低）
+  const directPaths = [
+    "aweme_detail",
+    "awemeDetail",
+    "itemStruct",
+    "videoDetail",
+    "videoData",
+    "aweme_info",
+    "video_info",
+    "item_detail",
+    "detail",
+    "data",
+  ];
+
+  for (const path of directPaths) {
+    if (detail[path]) {
+      const found = normalizeDetailData(detail[path], depth + 1);
+      if (found && (found.video || found.images)) return found;
+    }
   }
+
+  // 递归搜索所有子对象
+  for (const key of Object.keys(detail)) {
+    const val = detail[key];
+    if (val && typeof val === "object" && !Array.isArray(val)) {
+      const found = normalizeDetailData(val, depth + 1);
+      if (found && (found.video || found.images)) return found;
+    }
+  }
+
+  // 兜底：原样返回（让 formatResponse 报更精确的错误）
   return detail;
 }
 
 // ===== 数据格式化 =====
 function formatResponse(item) {
-  const hasImages = item.images && Array.isArray(item.images) && item.images.length > 0;
-  const type = hasImages ? "image" : "video";
+  // 调试：记录数据结构的顶层 key
+  const keys = Object.keys(item || {}).join(", ");
+  const hasVideo = !!item.video;
+  const hasImages = !!(item.images && Array.isArray(item.images) && item.images.length > 0);
+
+  // 如果顶层没有 video/images，再尝试深挖一次
+  if (!hasVideo && !hasImages) {
+    const deep = normalizeDetailData(item);
+    if (deep && deep !== item && (deep.video || deep.images)) {
+      item = deep;
+    }
+  }
+
+  const hasImagesNow = item.images && Array.isArray(item.images) && item.images.length > 0;
+  const type = hasImagesNow ? "image" : "video";
 
   const result = {
     type,
@@ -523,8 +559,17 @@ function formatResponse(item) {
     }));
     result.image_count = result.images.length;
   } else {
-    const video = item.video;
-    if (!video) throw new Error("数据中未找到视频");
+    const video = item.video || item.videoInfo;
+    if (!video) {
+      // 调试：列出可用字段
+      const available = Object.keys(item).filter(k => typeof item[k] !== "object" || item[k] === null);
+      const objKeys = Object.keys(item).filter(k => typeof item[k] === "object" && item[k] !== null);
+      throw new Error(
+        `数据中未找到视频信息。\n` +
+        `顶层字段: ${keys}\n` +
+        `对象字段: ${objKeys.join(", ") || "无"}`
+      );
+    }
 
     result.video = {
       url: getBestVideoUrl(video),
