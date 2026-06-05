@@ -476,42 +476,61 @@ async function strategyDouyinPage(awemeId, logs) {
 
 // 标准化不同格式的数据 + 深度搜索
 function normalizeDetailData(detail, depth = 0) {
-  if (!detail || typeof detail !== "object" || depth > 8) return detail;
+  if (!detail || typeof detail !== "object" || depth > 10) return detail;
 
-  // 直接匹配：有 aweme_id + video 或 images
+  // 直接匹配：有 aweme_id + (video 或 images)
   if (detail.aweme_id && (detail.video || detail.images)) return detail;
+
+  // 有 aweme_id 且包含 item_list
+  if (detail.aweme_id && detail.item_list?.length) return detail;
+
+  // 有 video 或 images 但没有 aweme_id — 可能 aweme_id 在父级
+  // 这种情况继续递归
 
   // 常见嵌套路径（优先级从高到低）
   const directPaths = [
-    "aweme_detail",
-    "awemeDetail",
-    "itemStruct",
-    "videoDetail",
-    "videoData",
-    "aweme_info",
-    "video_info",
-    "item_detail",
-    "detail",
-    "data",
+    "aweme_detail", "awemeDetail",
+    "itemStruct", "item_struct",
+    "videoDetail", "video_detail",
+    "videoData", "video_data",
+    "aweme_info", "video_info",
+    "item_detail", "itemInfo",
+    "detail", "data",
+    "shareVideo", "share_video",
   ];
 
   for (const path of directPaths) {
     if (detail[path]) {
       const found = normalizeDetailData(detail[path], depth + 1);
-      if (found && (found.video || found.images)) return found;
+      if (found && (found.video || found.images || found.aweme_id)) return found;
     }
   }
 
-  // 递归搜索所有子对象
+  // 递归搜索所有子对象（包括数组）
   for (const key of Object.keys(detail)) {
     const val = detail[key];
-    if (val && typeof val === "object" && !Array.isArray(val)) {
-      const found = normalizeDetailData(val, depth + 1);
-      if (found && (found.video || found.images)) return found;
+    if (val && typeof val === "object") {
+      if (Array.isArray(val)) {
+        // 搜索数组中的每个元素
+        for (const item of val) {
+          if (item && typeof item === "object") {
+            const found = normalizeDetailData(item, depth + 1);
+            if (found && (found.video || found.images || found.aweme_id)) return found;
+          }
+        }
+      } else {
+        const found = normalizeDetailData(val, depth + 1);
+        if (found && (found.video || found.images || found.aweme_id)) return found;
+      }
     }
   }
 
-  // 兜底：原样返回（让 formatResponse 报更精确的错误）
+  // 兜底：检查自身是否有任何视频相关字段
+  if (detail.play_addr || detail.download_addr || detail.bit_rate ||
+      detail.url_list || detail.origin_url || detail.duration) {
+    return detail;
+  }
+
   return detail;
 }
 
@@ -561,13 +580,24 @@ function formatResponse(item) {
   } else {
     const video = item.video || item.videoInfo;
     if (!video) {
-      // 调试：列出可用字段
+      // 调试：尽可能列出数据结构
       const available = Object.keys(item).filter(k => typeof item[k] !== "object" || item[k] === null);
       const objKeys = Object.keys(item).filter(k => typeof item[k] === "object" && item[k] !== null);
+      // 深入一层
+      let nestedInfo = "";
+      for (const ok of objKeys.slice(0, 3)) {
+        const inner = item[ok];
+        if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+          nestedInfo += `\n  ${ok} → { ${Object.keys(inner).slice(0, 10).join(", ")} }`;
+        } else if (Array.isArray(inner)) {
+          nestedInfo += `\n  ${ok} → [${inner.length} items]`;
+        }
+      }
       throw new Error(
         `数据中未找到视频信息。\n` +
         `顶层字段: ${keys}\n` +
-        `对象字段: ${objKeys.join(", ") || "无"}`
+        `对象字段: ${objKeys.join(", ") || "无"}` +
+        nestedInfo
       );
     }
 
