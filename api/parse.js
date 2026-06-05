@@ -59,11 +59,17 @@ export default async function handler(req, res) {
     return res.status(400).json({ success: false, error: "请输入有效的抖音链接" });
   }
 
+  // 从可能混有文字的分享文案中提取纯链接
+  let cleanUrl = extractUrlFromText(inputUrl);
+  if (!cleanUrl) {
+    return res.status(400).json({ success: false, error: "无法从文本中识别抖音链接" });
+  }
+
   // 记录每个步骤的日志，出错时返回给前端方便排查
   const logs = [];
 
   try {
-    const result = await parseDouyinLink(inputUrl, logs);
+    const result = await parseDouyinLink(cleanUrl, logs);
     return res.status(200).json({ success: true, data: result });
   } catch (err) {
     console.error("解析失败:", err.message);
@@ -186,6 +192,24 @@ function extractAwemeId(url) {
   m = url.match(/aweme_id=(\d+)/); if (m) return m[1];
   m = url.match(/item_id=(\d+)/);  if (m) return m[1];
   m = url.match(/(\d{17,20})/);    if (m) return m[1];
+  return null;
+}
+
+// ===== 从混合文本中提取抖音链接 =====
+function extractUrlFromText(text) {
+  // 抖音短链接
+  let m = text.match(/https?:\/\/v\.douyin\.com\/[a-zA-Z0-9\/?=&_%.-]+/);
+  if (m) return m[0];
+  // 标准链接
+  m = text.match(/https?:\/\/(?:www\.)?douyin\.com\/(?:video|note|user)\/[a-zA-Z0-9\/?=&_%.-]+/);
+  if (m) return m[0];
+  // iesdouyin
+  m = text.match(/https?:\/\/(?:www\.)?iesdouyin\.com\/[a-zA-Z0-9\/?=&_%.-]+/);
+  if (m) return m[0];
+  // 如果文本本身就像合法 URL（以 http 开头）
+  if (/^https?:\/\//.test(text.trim()) && /douyin\.com|iesdouyin\.com/i.test(text)) {
+    return text.trim();
+  }
   return null;
 }
 

@@ -547,14 +547,34 @@
       downloadBtn.addEventListener("click", handleDownload);
       copyUrlBtn.addEventListener("click", handleCopyUrl);
 
+      // ===== 从文本中提取抖音链接 =====
+      function extractDouyinUrl(text) {
+        if (!text) return "";
+        // 匹配抖音短链接: https://v.douyin.com/xxxxx/
+        let m = text.match(/https?:\/\/v\.douyin\.com\/[a-zA-Z0-9\/?=&_-]+/);
+        if (m) return m[0];
+        // 匹配抖音完整链接: https://www.douyin.com/video/xxxxx 或 /note/xxxxx
+        m = text.match(/https?:\/\/www\.douyin\.com\/(?:video|note)\/\d+/);
+        if (m) return m[0];
+        // 匹配 iesdouyin 链接
+        m = text.match(/https?:\/\/www\.iesdouyin\.com\/[a-zA-Z0-9\/?=&_-]+/);
+        if (m) return m[0];
+        // 匹配不带 www 的 douyin.com
+        m = text.match(/https?:\/\/douyin\.com\/[a-zA-Z0-9\/?=&_-]+/);
+        if (m) return m[0];
+        return "";
+      }
+
       // ===== 粘贴功能 =====
       async function handlePaste() {
         try {
           const text = await navigator.clipboard.readText();
           if (text) {
-            urlInput.value = text.trim();
-            // 如果粘贴的内容看起来像抖音链接，自动提交
-            if (/douyin\.com|iesdouyin\.com/i.test(text)) {
+            // 自动从分享文案中提取链接
+            const url = extractDouyinUrl(text);
+            if (url) {
+              urlInput.value = url;
+            } else {
               urlInput.value = text.trim();
             }
           }
@@ -570,7 +590,9 @@
         try {
           const text = await navigator.clipboard.readText();
           if (text && /douyin\.com|iesdouyin\.com/i.test(text)) {
-            urlInput.value = text.trim();
+            // 自动提取链接
+            const url = extractDouyinUrl(text);
+            urlInput.value = url || text.trim();
           }
         } catch {
           // 静默失败
@@ -579,14 +601,22 @@
 
       // ===== 提交解析 =====
       async function handleSubmit() {
-        const url = urlInput.value.trim();
+        let url = urlInput.value.trim();
+
+        // 自动从粘贴的文案中提取抖音链接
+        const extracted = extractDouyinUrl(url);
+        if (extracted) {
+          url = extracted;
+          urlInput.value = url; // 修正输入框显示
+        }
+
         if (!url) {
-          showError("请先粘贴抖音分享链接");
+          showError("请先粘贴抖音分享链接\n\n（在抖音 App 里点分享→复制链接，然后回到这里点粘贴）");
           return;
         }
 
         if (!/douyin\.com|iesdouyin\.com/i.test(url)) {
-          showError("请输入有效的抖音链接（包含 douyin.com）");
+          showError("未识别到抖音链接，请重新复制\n\n确保链接包含 douyin.com");
           return;
         }
 
