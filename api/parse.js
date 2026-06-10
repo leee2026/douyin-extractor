@@ -329,6 +329,18 @@ function formatDouyinResponse(item) {
 //                       小红书解析模块
 // ===================================================================
 async function parseXiaohongshu(inputUrl, logs) {
+  try {
+    return await _parseXiaohongshu(inputUrl, logs);
+  } catch (e) {
+    // 兜底：确保所有错误都被捕获并记入日志
+    if (!logs.some(l => l.includes(e.message))) {
+      logs.push(`小红书: 未捕获错误 - ${e.message}`);
+    }
+    throw e;
+  }
+}
+
+async function _parseXiaohongshu(inputUrl, logs) {
   let url = inputUrl;
   // 短链接重定向
   if (/xhslink\.com/i.test(url)) {
@@ -503,7 +515,6 @@ async function xhsStrategyHtml(noteId, redirectUrl, logs) {
 }
 
 async function xhsStrategyApi(noteId, logs) {
-  // 尝试多个 API 端点
   const apiEndpoints = [
     `https://edith.xiaohongshu.com/api/sns/web/v1/note/${noteId}`,
     `https://www.xiaohongshu.com/api/sns/web/v1/note/${noteId}`,
@@ -518,24 +529,37 @@ async function xhsStrategyApi(noteId, logs) {
           "Accept": "application/json",
           "Accept-Language": "zh-CN,zh;q=0.9",
           "Referer": `https://www.xiaohongshu.com/explore/${noteId}`,
-          "Origin": "https://www.xiaohongshu.com",
         },
       });
-      logs.push(`小红书: ${apiUrl.split("/").slice(-2).join("/")} → HTTP ${resp.status}`);
+      const ct = resp.headers.get("content-type") || "";
+      logs.push(`小红书: ${apiUrl.split("/").slice(-2).join("/")} → ${resp.status} (${ct.substring(0, 30)})`);
       if (!resp.ok) continue;
+      // 确认返回的是 JSON 再解析
+      if (!ct.includes("json") && !ct.includes("javascript")) {
+        const preview = (await resp.text()).substring(0, 60);
+        logs.push(`小红书: 非JSON响应: ${preview}`);
+        continue;
+      }
       const text = await resp.text();
-      if (!text || text.length < 10) continue;
-      const data = JSON.parse(text);
+      if (!text || text.length < 50) continue;
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (parseErr) {
+        logs.push(`小红书: JSON解析失败: ${parseErr.message} (前50字: ${text.substring(0, 50)})`);
+        continue;
+      }
       logs.push(`小红书: API success=${data.success}, code=${data.code}`);
 
       if (data.success && data.data) {
         const noteCard = data.data.items?.[0]?.note_card || data.data.note || data.data;
         if (noteCard) return formatXhsResponse(noteCard);
-        // 深度搜索
         const found = deepFind(data.data, ["noteId", "imageList", "video", "title", "user"]);
         if (found) return formatXhsResponse(found);
       }
-    } catch {}
+    } catch (e) {
+      logs.push(`小红书: API网络错误 - ${e.message}`);
+    }
   }
 
   throw new Error("所有API端点均失败");
