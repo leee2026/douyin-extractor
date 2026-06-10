@@ -564,12 +564,6 @@ async function xhsStrategyApi(noteId, logs) {
 
   throw new Error("所有API端点均失败");
 }
-    const noteData = data.data.items?.[0]?.note_card || data.data.note || data.data;
-    if (noteData) return formatXhsResponse(noteData);
-  }
-
-  throw new Error("API返回数据格式不符");
-}
 
 function formatXhsResponse(noteData) {
   const noteType = noteData.type || noteData.noteType || "normal";
