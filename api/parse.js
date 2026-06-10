@@ -457,11 +457,15 @@ async function xhsStrategyHtml(noteId, redirectUrl, logs) {
                 .replace(/Infinity/g, "null");
               const data = JSON.parse(sanitized);
               logs.push(`小红书: ✅ JSON解析成功 (keys: ${Object.keys(data).slice(0, 8).join(", ")})`);
+              // XHS 将笔记放在 noteData.data.noteData 中
               const note = data.note || data.noteDetail || data.noteInfo
+                || data.noteData?.data?.noteData
+                || data.noteData?.normalNotePreloadData
                 || data.global?.note || data.global?.noteDetail
                 || data.serverData?.note || data.pageData?.note;
               if (note) { logs.push("小红书: 找到 note 数据"); return formatXhsResponse(note); }
-              const found = deepFind(data, ["noteId", "imageList", "video", "user"]);
+              // 搜索 noteData 子树
+              const found = deepFind(data.noteData || data, ["noteId", "imageList", "video", "user"]);
               if (found) { logs.push("小红书: 深度搜索找到笔记数据"); return formatXhsResponse(found); }
               // 打印结构帮助定位
               logs.push(`小红书: 未找到note，展开结构:`);
@@ -653,49 +657,31 @@ function formatXhsResponse(noteData) {
     result.images = images.map((img) => {
       const rawUrl = img.url || img.urlDefault || img.imageUrl || img.url_default || "";
       const fileId = img.fileId || img.file_id || "";
-      const traceId = img.traceId || img.trace_id || "";
 
       // 去水印策略：
-      // 1. 尝试使用 infoList 中不同场景的图（可能有不带水印的）
-      let bestUrl = rawUrl;
-      if (img.infoList && Array.isArray(img.infoList)) {
-        // 优先找原图场景 (imageScene: "ORIGIN" 或类似)
-        const originInfo = img.infoList.find(i => i.imageScene?.includes("ORIGIN") || i.scene?.includes("ORIGIN"));
-        if (originInfo?.url) bestUrl = originInfo.url;
-        // 其次找最大尺寸的
-        if (!originInfo && img.infoList.length > 0) {
-          const largest = img.infoList.reduce((a, b) => (a.width || 0) > (b.width || 0) ? a : b);
-          if (largest?.url) bestUrl = largest.url;
-        }
-      }
+      // 1. 去掉 OSS 处理后缀 !h5_*、!hd_* 等（水印在此处）
+      let cleanUrl = rawUrl.replace(/![a-z0-9_]+jpg$/i, "").replace(/![a-z0-9_]+png$/i, "").replace(/![a-z0-9_]+webp$/i, "");
+      // 2. 再去掉 ?x-oss-process=、?imageView2/ 等参数
+      cleanUrl = cleanUrl.replace(/\?x-oss-process=.*$/, "").replace(/\?imageView2?\/.*$/, "").replace(/\?imageMogr2\/.*$/, "");
 
-      // 2. 删除所有 OSS 处理参数（?x-oss-process=... 和 ?imageView2/...）
-      let cleanUrl = bestUrl;
-      // 去掉 ?x-oss-process=... 后面所有内容
-      cleanUrl = cleanUrl.replace(/\?x-oss-process=.*$/, "");
-      // 去掉 ?imageView2/... 后面所有内容
-      cleanUrl = cleanUrl.replace(/\?imageView2\/.*$/, "");
-      cleanUrl = cleanUrl.replace(/\?imageMogr2\/.*$/, "");
-      // 去掉 CTK 参数
-      cleanUrl = cleanUrl.replace(/\?imageView2\/[^?]*$/, "");
-
-      // 3. 用 fileId/traceId 构造纯文件直链（无任何处理参数）
+      // 3. 如果有 fileId，构造纯直链
       let directUrl = "";
       if (fileId) {
         directUrl = `https://sns-webpic-qc.xhscdn.com/${fileId}`;
-      } else if (traceId) {
-        directUrl = `https://sns-webpic-qc.xhscdn.com/${traceId}`;
       }
 
-      // 4. 如果 cleanUrl 和 bestUrl 没区别，尝试直接从 rawUrl 剥离所有参数
-      if (cleanUrl === bestUrl && rawUrl) {
-        cleanUrl = rawUrl.replace(/\?.*$/, ""); // 去掉所有 query 参数
+      // 4. 从 infoList 找最大尺寸的图（作为备选）
+      let infoUrl = "";
+      const infoList = img.infoList || [];
+      if (infoList.length > 0) {
+        const largest = infoList.reduce((a, b) => (a.width || 0) > (b.width || 0) ? a : b, infoList[0]);
+        if (largest?.url) infoUrl = largest.url.replace(/![a-z0-9_]+jpg$/i, "").replace(/![a-z0-9_]+png$/i, "");
       }
 
       return {
-        url: bestUrl,
-        cleanUrl: cleanUrl,           // 清理参数后的 URL
-        directUrl: directUrl || cleanUrl, // 纯文件直链（优先）
+        url: rawUrl,
+        cleanUrl: cleanUrl || infoUrl || rawUrl,
+        directUrl: directUrl || cleanUrl || infoUrl,
         thumb: img.urlPre || img.url_pre || img.thumbnail || rawUrl || "",
         fileId: fileId,
       };
