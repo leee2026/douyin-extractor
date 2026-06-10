@@ -501,12 +501,33 @@ async function xhsStrategyHtml(noteId, redirectUrl, logs) {
     }
   }
 
-  // 诊断：检查 HTML 中有什么内容
+  // 诊断：找到 __INITIAL_STATE__ 并输出周围文本
+  const initIdx = bestHtml.indexOf("__INITIAL_STATE__");
+  if (initIdx >= 0) {
+    const snippet = bestHtml.substring(initIdx, initIdx + 300);
+    logs.push(`小红书: __INITIAL_STATE__ 上下文: ${snippet.replace(/\n/g, "\\n").substring(0, 250)}`);
+    // 额外尝试：XHS 可能用 replace 模式注入数据
+    // 例如: window.__INITIAL_STATE__ = JSON.parse('{...}')
+    const parseMatch = snippet.match(/JSON\.parse\s*\(\s*['"]([\s\S]+?)['"]\s*\)/);
+    if (parseMatch) {
+      try {
+        const unescaped = parseMatch[1].replace(/\\"/g, '"').replace(/\\'/g, "'").replace(/\\\\/g, "\\");
+        const data = JSON.parse(unescaped);
+        logs.push(`小红书: 从 JSON.parse('...') 提取成功`);
+        const note = data.note || data.noteDetail || data;
+        if (note) return formatXhsResponse(note);
+        const found = deepFind(data, ["noteId", "imageList", "video", "user"]);
+        if (found) return formatXhsResponse(found);
+      } catch (e) {
+        logs.push(`小红书: JSON.parse('...') 解析失败: ${e.message}`);
+      }
+    }
+  }
   const keywords = ["__INITIAL_STATE__", "__INITIAL_SSR_STATE__", "noteId", "note_id",
     "imageList", "image_list", "window.__", "RENDER_DATA", "noteDetailMap"];
   const found = keywords.filter(k => bestHtml.includes(k));
   if (found.length > 0) {
-    logs.push(`小红书: HTML关键词检测: ${found.join(", ")}`);
+    logs.push(`小红书: HTML关键词: ${found.join(", ")}`);
   } else {
     logs.push("小红书: HTML中未找到任何已知关键词，页面可能是纯客户端渲染");
   }
