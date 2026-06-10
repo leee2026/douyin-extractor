@@ -119,26 +119,31 @@ function extractRENDER_DATA(html) {
 }
 
 function extractInitState(html) {
-  // 尝试多种模式匹配 __INITIAL_STATE__
-  for (const re of [
+  // 多种 __INITIAL_STATE__ 匹配模式
+  const patterns = [
+    // XHS/现代 SPA: 跨行 JSON，以 (function 或 </script> 结束
+    /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\n)\s*\(function/s,
+    /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});?\s*\n\s*<\/script>/,
+    /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});?\s*\(function/s,
+    /__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});/,
+    // 传统匹配
     /window\.__INITIAL_STATE__\s*=\s*(\{.+?\});?\s*(?:window|<\/script)/s,
-    /__INITIAL_STATE__\s*=\s*(\{[^;]+)/
-  ]) {
+    /__INITIAL_STATE__\s*=\s*(\{[^;]+)/,
+  ];
+  for (const re of patterns) {
     const m = html.match(re);
     if (m) {
       try { return JSON.parse(m[1]); } catch {}
+      // 尝试清理 unicode 转义
+      try {
+        const cleaned = m[1].replace(/\\u002F/g, "/").replace(/\\u0026/g, "&").replace(/\\"/g, '"');
+        return JSON.parse(cleaned);
+      } catch {}
     }
   }
-  // 更宽松的匹配：找 __INITIAL_STATE__ 后面的 JSON 替换后内容
-  // 小红书页面用的是 JSON.parse(JSON.stringify()) 替换后的格式
-  const m2 = html.match(/__INITIAL_STATE__\s*=\s*({[\s\S]+?})\s*\n\s*<\/script>/);
-  if (m2) {
-    try {
-      // 尝试替换 unicode 转义
-      const cleaned = m2[1].replace(/\\u002F/g, "/").replace(/\\u0026/g, "&");
-      return JSON.parse(cleaned);
-    } catch {}
-  }
+  // SSR state
+  const ssrMatch = html.match(/window\.__INITIAL_SSR_STATE__\s*=\s*(\{[\s\S]+?\});?\s*<\/script>/);
+  if (ssrMatch) { try { return JSON.parse(ssrMatch[1]); } catch {} }
   return null;
 }
 
@@ -324,80 +329,78 @@ function formatDouyinResponse(item) {
 //                       小红书解析模块
 // ===================================================================
 async function parseXiaohongshu(inputUrl, logs) {
-  // 1. 短链接 → 重定向
   let url = inputUrl;
+  // 短链接重定向
   if (/xhslink\.com/i.test(url)) {
     logs.push("小红书: 跟踪短链接...");
     url = await resolveXhsShortLink(url, logs);
     if (!url) throw new Error("小红书短链接重定向失败");
-    logs.push(`小红书: 跳转至 ${url.substring(0, 60)}...`);
+    logs.push(`小红书: 跳转至 ${url.substring(0, 80)}...`);
   }
 
-  // 2. 提取 note_id
+  // 提取 note_id
   let noteId = null;
   let m;
   m = url.match(/\/explore\/([a-zA-Z0-9_-]+)/); if (m) noteId = m[1];
   m = url.match(/\/discovery\/item\/([a-zA-Z0-9_-]+)/); if (m) noteId = m[1];
   m = url.match(/\/note\/([a-zA-Z0-9_-]+)/); if (m) noteId = m[1];
-  m = url.match(/note[_-]?[iI][dD][=:]?\s*["']?([a-zA-Z0-9_-]{10,30})["']?/); if (m) noteId = m[1];
   if (!noteId) {
-    // 从 URL 路径最后一段提取
     const parts = url.replace(/[?#].*$/, "").split("/").filter(Boolean);
     noteId = parts[parts.length - 1];
   }
-  if (!noteId || noteId.length < 8) throw new Error(`小红书: 无法识别笔记ID (${noteId})`);
+  if (!noteId || noteId.length < 6) throw new Error(`小红书: 无法识别笔记ID (${noteId})`);
   logs.push(`小红书: 笔记ID ${noteId}`);
 
-  // 3. 策略1：抓取笔记页面解析 __INITIAL_STATE__
+  // 策略1: 解析页面 HTML（加强版）
   try {
     logs.push("小红书: 策略1 - 解析页面HTML...");
-    return await xhsStrategyHtml(noteId, logs);
+    return await xhsStrategyHtml(noteId, url, logs);
   } catch (e) { logs.push(`小红书: 策略1失败 - ${e.message}`); }
 
-  // 4. 策略2：尝试用 note_id 直接拼 API
+  // 策略2: API（多端点尝试）
   try {
     logs.push("小红书: 策略2 - 尝试API...");
     return await xhsStrategyApi(noteId, logs);
   } catch (e) { logs.push(`小红书: 策略2失败 - ${e.message}`); }
 
-  throw new Error("小红书: 所有策略均失败");
+  throw new Error("小红书: 所有策略均失败，笔记可能是私密的或被删除");
 }
 
 async function resolveXhsShortLink(shortUrl, logs) {
-  // xhslink.com 短链接跟随重定向
-  try {
-    const resp = await fetch(shortUrl, {
-      redirect: "follow",
-      headers: {
-        "User-Agent": MOBILE_UA,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "zh-CN,zh;q=0.9",
-      },
-    });
-    if (resp.url && /xiaohongshu\.com/i.test(resp.url)) return resp.url;
-  } catch { logs.push("小红书重定向: follow失败"); }
-
-  // 手动
-  try {
-    const resp = await fetch(shortUrl, {
-      redirect: "manual",
-      headers: { "User-Agent": MOBILE_UA },
-    });
-    const loc = resp.headers.get("location");
-    if (loc) return loc.startsWith("http") ? loc : `https://www.xiaohongshu.com${loc}`;
-  } catch { logs.push("小红书重定向: manual失败"); }
-
+  // xhslink.com → 跟随重定向获取真实 URL
+  for (const method of ["follow", "manual"]) {
+    try {
+      const resp = await fetch(shortUrl, {
+        redirect: method === "follow" ? "follow" : "manual",
+        headers: {
+          "User-Agent": MOBILE_UA,
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "zh-CN,zh;q=0.9",
+        },
+      });
+      const loc = resp.headers.get("location");
+      if (loc) {
+        if (loc.startsWith("http")) return loc;
+        return `https://www.xiaohongshu.com${loc.startsWith("/") ? "" : "/"}${loc}`;
+      }
+      if (resp.url && /xiaohongshu\.com/i.test(resp.url)) return resp.url;
+    } catch {}
+  }
   return null;
 }
 
-async function xhsStrategyHtml(noteId, logs) {
-  // 尝试两个常见的URL格式
+async function xhsStrategyHtml(noteId, redirectUrl, logs) {
+  // 尝试多个 URL 变体
   const urls = [
     `https://www.xiaohongshu.com/explore/${noteId}`,
     `https://www.xiaohongshu.com/discovery/item/${noteId}`,
   ];
+  // 如果有重定向后的完整 URL，也加上
+  if (redirectUrl && /xiaohongshu\.com/i.test(redirectUrl)) {
+    urls.unshift(redirectUrl);
+  }
 
-  let lastHtml = "";
+  let bestHtml = "";
 
   for (const pageUrl of urls) {
     try {
@@ -408,73 +411,135 @@ async function xhsStrategyHtml(noteId, logs) {
           "Accept-Language": "zh-CN,zh;q=0.9",
         },
       });
-      if (!resp.ok) continue;
+      if (!resp.ok) { logs.push(`小红书: ${pageUrl.split("/").pop()} HTTP ${resp.status}`); continue; }
 
       const html = await resp.text();
-      lastHtml = html;
-      logs.push(`小红书: ${pageUrl.split("/").pop()} HTML长度 ${html.length}`);
+      bestHtml = html;
+      logs.push(`小红书: ${new URL(pageUrl).pathname.split("/").pop() || "page"} HTML ${html.length}字节`);
 
-      // 尝试提取 __INITIAL_STATE__
-      const initState = extractInitState(html);
-      if (initState) {
-        logs.push(`小红书: 提取到 __INITIAL_STATE__, 顶层keys: ${Object.keys(initState).slice(0, 10).join(", ")}`);
-        // 小红书的结构：note 或 noteDetail 在顶层
-        const noteData = initState.note || initState.noteDetail || initState.noteInfo;
-        if (noteData) {
-          logs.push(`小红书: 找到 note 数据`);
-          return formatXhsResponse(noteData);
+      // === 提取方式1: __INITIAL_STATE__（多种正则） ===
+      const initPatterns = [
+        /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\n)\s*\(function/s,
+        /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});?\s*\n\s*<\/script>/,
+        /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});?\s*\(function/s,
+        /__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});/,
+      ];
+      for (const re of initPatterns) {
+        const sm = html.match(re);
+        if (sm) {
+          try {
+            const data = JSON.parse(sm[1]);
+            logs.push(`小红书: 提取到 __INITIAL_STATE__ (keys: ${Object.keys(data).slice(0, 8).join(", ")})`);
+            const note = data.note || data.noteDetail || data.noteInfo;
+            if (note) return formatXhsResponse(note);
+            const found = deepFind(data, ["noteId", "imageList", "video", "user"]);
+            if (found) return formatXhsResponse(found);
+            logs.push(`小红书: __INITIAL_STATE__ 中未找到 note，尝试搜索全部字段`);
+            // 打印所有顶层 key 的信息
+            for (const k of Object.keys(data)) {
+              const v = data[k];
+              if (v && typeof v === "object" && !Array.isArray(v)) {
+                const sub = Object.keys(v).slice(0, 5).join(", ");
+                if (sub.includes("note") || sub.includes("Note") || sub.includes("image")) {
+                  logs.push(`  ${k} → { ${sub} } ← 可能包含笔记数据`);
+                }
+              }
+            }
+          } catch (e) {
+            logs.push(`小红书: __INITIAL_STATE__ JSON解析失败: ${e.message}`);
+          }
         }
-        // 深度搜索
-        const found = deepFind(initState, ["noteId", "imageList", "video", "title", "user"]);
-        if (found) {
-          logs.push(`小红书: 深度搜索找到笔记数据`);
-          return formatXhsResponse(found);
-        }
-        logs.push(`小红书: __INITIAL_STATE__ 中未找到note数据`);
       }
 
-      // 尝试 RENDER_DATA（万一小红书也用这个）
-      const renderData = extractRENDER_DATA(html);
-      if (renderData) {
-        logs.push(`小红书: 发现 RENDER_DATA`);
-        const found = deepFind(renderData, ["noteId", "imageList", "note"]);
-        if (found) return formatXhsResponse(found);
+      // === 提取方式2: __INITIAL_SSR_STATE__ ===
+      const ssrMatch = html.match(/window\.__INITIAL_SSR_STATE__\s*=\s*(\{[\s\S]+?\});?\s*<\/script>/);
+      if (ssrMatch) {
+        try {
+          const data = JSON.parse(ssrMatch[1]);
+          logs.push(`小红书: 提取到 __INITIAL_SSR_STATE__ (keys: ${Object.keys(data).slice(0, 8).join(", ")})`);
+          const note = data.note || data.noteDetail;
+          if (note) return formatXhsResponse(note);
+          const found = deepFind(data, ["noteId", "imageList", "video", "user"]);
+          if (found) return formatXhsResponse(found);
+        } catch {}
       }
+
+      // === 提取方式3: 在 script 标签中搜索 noteId ===
+      const scriptRegex = /<script[^>]*>([\s\S]*?)<\/script>/gi;
+      let scriptMatch;
+      while ((scriptMatch = scriptRegex.exec(html)) !== null) {
+        const content = scriptMatch[1];
+        if (!content.includes("noteId") && !content.includes("note_id")) continue;
+        // 尝试提取 JSON
+        const jsonRegex = /\{[\s\S]*"noteId"[\s\S]*\}/g;
+        let jsonMatch;
+        while ((jsonMatch = jsonRegex.exec(content)) !== null) {
+          try {
+            const data = JSON.parse(jsonMatch[0]);
+            if (data.noteId || data.note_id) {
+              logs.push("小红书: 从 script 标签中提取到 note 数据");
+              return formatXhsResponse(data);
+            }
+          } catch {}
+        }
+      }
+
     } catch (e) {
-      logs.push(`小红书: ${pageUrl} 请求失败 - ${e.message}`);
+      logs.push(`小红书: ${pageUrl} 请求异常 - ${e.message}`);
     }
   }
 
-  // 最后尝试：直接在HTML中找包含 noteId 的 JSON
-  const noteIdPattern = new RegExp(`"noteId"\\s*:\\s*"${noteId}"[\\s\\S]{0,5000}`, "g");
-  const idMatch = lastHtml.match(noteIdPattern);
-  if (idMatch) {
-    logs.push("小红书: HTML中找到了noteId引用（但完整JSON未解析成功）");
+  // 诊断：检查 HTML 中有什么内容
+  const keywords = ["__INITIAL_STATE__", "__INITIAL_SSR_STATE__", "noteId", "note_id",
+    "imageList", "image_list", "window.__", "RENDER_DATA", "noteDetailMap"];
+  const found = keywords.filter(k => bestHtml.includes(k));
+  if (found.length > 0) {
+    logs.push(`小红书: HTML关键词检测: ${found.join(", ")}`);
+  } else {
+    logs.push("小红书: HTML中未找到任何已知关键词，页面可能是纯客户端渲染");
   }
 
   throw new Error("小红书页面HTML中未找到笔记数据");
 }
 
 async function xhsStrategyApi(noteId, logs) {
-  // 尝试小红书的公开 note API
-  const apiUrl = `https://edith.xiaohongshu.com/api/sns/web/v1/feed?source_note_id=${noteId}&note_id=${noteId}`;
+  // 尝试多个 API 端点
+  const apiEndpoints = [
+    `https://edith.xiaohongshu.com/api/sns/web/v1/note/${noteId}`,
+    `https://www.xiaohongshu.com/api/sns/web/v1/note/${noteId}`,
+    `https://edith.xiaohongshu.com/api/sns/web/v1/feed?source_note_id=${noteId}`,
+  ];
 
-  const resp = await fetch(apiUrl, {
-    headers: {
-      "User-Agent": MOBILE_UA,
-      "Accept": "application/json",
-      "Accept-Language": "zh-CN,zh;q=0.9",
-      "Referer": `https://www.xiaohongshu.com/explore/${noteId}`,
-      "Origin": "https://www.xiaohongshu.com",
-    },
-  });
+  for (const apiUrl of apiEndpoints) {
+    try {
+      const resp = await fetch(apiUrl, {
+        headers: {
+          "User-Agent": MOBILE_UA,
+          "Accept": "application/json",
+          "Accept-Language": "zh-CN,zh;q=0.9",
+          "Referer": `https://www.xiaohongshu.com/explore/${noteId}`,
+          "Origin": "https://www.xiaohongshu.com",
+        },
+      });
+      logs.push(`小红书: ${apiUrl.split("/").slice(-2).join("/")} → HTTP ${resp.status}`);
+      if (!resp.ok) continue;
+      const text = await resp.text();
+      if (!text || text.length < 10) continue;
+      const data = JSON.parse(text);
+      logs.push(`小红书: API success=${data.success}, code=${data.code}`);
 
-  if (!resp.ok) throw new Error(`API HTTP ${resp.status}`);
-  const data = await resp.json();
-  logs.push(`小红书: API success=${data.success}, code=${data.code}`);
+      if (data.success && data.data) {
+        const noteCard = data.data.items?.[0]?.note_card || data.data.note || data.data;
+        if (noteCard) return formatXhsResponse(noteCard);
+        // 深度搜索
+        const found = deepFind(data.data, ["noteId", "imageList", "video", "title", "user"]);
+        if (found) return formatXhsResponse(found);
+      }
+    } catch {}
+  }
 
-  if (data.success && data.data) {
-    // data.data 可能包含 items 数组或直接是 note 数据
+  throw new Error("所有API端点均失败");
+}
     const noteData = data.data.items?.[0]?.note_card || data.data.note || data.data;
     if (noteData) return formatXhsResponse(noteData);
   }
