@@ -755,8 +755,8 @@
           imgEl.loading = "lazy";
           item.appendChild(imgEl);
 
-          // 下载链接优先用 directUrl（无水印）
-          const dlUrl = img.directUrl || img.url || img.thumb || "";
+          // 下载链接优先级: directUrl > cleanUrl > url > thumb
+          const dlUrl = img.directUrl || img.cleanUrl || img.url || img.thumb || "";
 
           const dlBtn = document.createElement("button");
           dlBtn.className = "img-download";
