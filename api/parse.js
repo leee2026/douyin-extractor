@@ -119,31 +119,31 @@ function extractRENDER_DATA(html) {
 }
 
 function extractInitState(html) {
-  // 多种 __INITIAL_STATE__ 匹配模式
   const patterns = [
-    // XHS/现代 SPA: 跨行 JSON，以 (function 或 </script> 结束
+    /__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\n)\s*\(function/s,
+    /__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});?\s*\n\s*<\/script>/,
+    /__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});?\s*\(function/s,
+    /__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});?\s*\n\s*<script/s,
+    /__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});/,
+    /__INITIAL_STATE__\s*=\s*(\{[^;]+)/,
     /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\n)\s*\(function/s,
     /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});?\s*\n\s*<\/script>/,
-    /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});?\s*\(function/s,
-    /__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});/,
-    // 传统匹配
     /window\.__INITIAL_STATE__\s*=\s*(\{.+?\});?\s*(?:window|<\/script)/s,
     /__INITIAL_STATE__\s*=\s*(\{[^;]+)/,
   ];
+  const sanitize = (s) => s.replace(/undefined/g, "null").replace(/NaN/g, "null").replace(/Infinity/g, "null");
   for (const re of patterns) {
     const m = html.match(re);
     if (m) {
-      try { return JSON.parse(m[1]); } catch {}
-      // 尝试清理 unicode 转义
+      try { return JSON.parse(sanitize(m[1])); } catch {}
       try {
-        const cleaned = m[1].replace(/\\u002F/g, "/").replace(/\\u0026/g, "&").replace(/\\"/g, '"');
+        const cleaned = sanitize(m[1].replace(/\\u002F/g, "/").replace(/\\u0026/g, "&"));
         return JSON.parse(cleaned);
       } catch {}
     }
   }
-  // SSR state
   const ssrMatch = html.match(/window\.__INITIAL_SSR_STATE__\s*=\s*(\{[\s\S]+?\});?\s*<\/script>/);
-  if (ssrMatch) { try { return JSON.parse(ssrMatch[1]); } catch {} }
+  if (ssrMatch) { try { return JSON.parse(sanitize(ssrMatch[1])); } catch {} }
   return null;
 }
 
@@ -446,7 +446,12 @@ async function xhsStrategyHtml(noteId, redirectUrl, logs) {
         const sm = html.match(re);
         if (sm) {
           try {
-            const data = JSON.parse(sm[1]);
+            // XHS 的 __INITIAL_STATE__ 含 JS 字面量 (undefined, NaN)，替换为 null
+            const sanitized = sm[1]
+              .replace(/undefined/g, "null")
+              .replace(/NaN/g, "null")
+              .replace(/Infinity/g, "null");
+            const data = JSON.parse(sanitized);
             logs.push(`小红书: ✅ __INITIAL_STATE__ 解析成功 (keys: ${Object.keys(data).slice(0, 8).join(", ")})`);
             // XHS 把笔记数据放在 global.note 或 note 下
             const note = data.note || data.noteDetail || data.noteInfo
