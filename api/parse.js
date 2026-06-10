@@ -429,31 +429,55 @@ async function xhsStrategyHtml(noteId, redirectUrl, logs) {
       bestHtml = html;
       logs.push(`小红书: ${new URL(pageUrl).pathname.split("/").pop() || "page"} HTML ${html.length}字节`);
 
-      // === 提取方式1: __INITIAL_STATE__（多种正则） ===
+      // === 提取方式1: __INITIAL_STATE__（XHS 实际格式是 __INITIAL_STATE__={...} 没有 window.） ===
       const initPatterns = [
+        // XHS 格式：__INITIAL_STATE__={...}（无 window 前缀，无空格）
+        /__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\n)\s*\(function/s,
+        /__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});?\s*\n\s*<\/script>/,
+        /__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});?\s*\(function/s,
+        /__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});?\s*\n\s*<script/s,
+        /__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});/,
+        /__INITIAL_STATE__\s*=\s*(\{[^;]+)/,
+        // 也保留 window. 格式以防万一
         /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\n)\s*\(function/s,
         /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});?\s*\n\s*<\/script>/,
-        /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});?\s*\(function/s,
-        /__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});/,
       ];
       for (const re of initPatterns) {
         const sm = html.match(re);
         if (sm) {
           try {
             const data = JSON.parse(sm[1]);
-            logs.push(`小红书: 提取到 __INITIAL_STATE__ (keys: ${Object.keys(data).slice(0, 8).join(", ")})`);
-            const note = data.note || data.noteDetail || data.noteInfo;
-            if (note) return formatXhsResponse(note);
+            logs.push(`小红书: ✅ __INITIAL_STATE__ 解析成功 (keys: ${Object.keys(data).slice(0, 8).join(", ")})`);
+            // XHS 把笔记数据放在 global.note 或 note 下
+            const note = data.note || data.noteDetail || data.noteInfo
+              || data.global?.note || data.global?.noteDetail
+              || data.serverData?.note || data.pageData?.note;
+            if (note) {
+              logs.push(`小红书: 找到 note 数据`);
+              return formatXhsResponse(note);
+            }
+            // 深度搜索（放宽条件：只搜 noteId 和 imageList）
             const found = deepFind(data, ["noteId", "imageList", "video", "user"]);
-            if (found) return formatXhsResponse(found);
-            logs.push(`小红书: __INITIAL_STATE__ 中未找到 note，尝试搜索全部字段`);
-            // 打印所有顶层 key 的信息
-            for (const k of Object.keys(data)) {
+            if (found) {
+              logs.push(`小红书: 深度搜索找到笔记数据`);
+              return formatXhsResponse(found);
+            }
+            // 打印子对象的 keys 帮助定位
+            logs.push(`小红书: 数据中未找到 note，展开子对象:`);
+            for (const k of Object.keys(data).slice(0, 6)) {
               const v = data[k];
               if (v && typeof v === "object" && !Array.isArray(v)) {
-                const sub = Object.keys(v).slice(0, 5).join(", ");
-                if (sub.includes("note") || sub.includes("Note") || sub.includes("image")) {
-                  logs.push(`  ${k} → { ${sub} } ← 可能包含笔记数据`);
+                const subKeys = Object.keys(v).slice(0, 8).join(", ");
+                logs.push(`  ${k} → { ${subKeys} }`);
+                // 深入一层
+                for (const sk of Object.keys(v).slice(0, 4)) {
+                  const sv = v[sk];
+                  if (sv && typeof sv === "object" && !Array.isArray(sv)) {
+                    const ssk = Object.keys(sv).slice(0, 6).join(", ");
+                    if (ssk.includes("note") || ssk.includes("Note") || ssk.includes("image") || ssk.includes("title")) {
+                      logs.push(`    ${k}.${sk} → { ${ssk} } ← 候选`);
+                    }
+                  }
                 }
               }
             }
