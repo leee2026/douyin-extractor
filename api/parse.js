@@ -429,65 +429,53 @@ async function xhsStrategyHtml(noteId, redirectUrl, logs) {
       bestHtml = html;
       logs.push(`小红书: ${new URL(pageUrl).pathname.split("/").pop() || "page"} HTML ${html.length}字节`);
 
-      // === 提取方式1: __INITIAL_STATE__（XHS 实际格式是 __INITIAL_STATE__={...} 没有 window.） ===
-      const initPatterns = [
-        // XHS 格式：__INITIAL_STATE__={...}（无 window 前缀，无空格）
-        /__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\n)\s*\(function/s,
-        /__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});?\s*\n\s*<\/script>/,
-        /__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});?\s*\(function/s,
-        /__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});?\s*\n\s*<script/s,
-        /__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});/,
-        /__INITIAL_STATE__\s*=\s*(\{[^;]+)/,
-        // 也保留 window. 格式以防万一
-        /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\n)\s*\(function/s,
-        /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]+?\});?\s*\n\s*<\/script>/,
-      ];
-      for (const re of initPatterns) {
-        const sm = html.match(re);
-        if (sm) {
-          try {
-            // XHS 的 __INITIAL_STATE__ 含 JS 字面量 (undefined, NaN)，替换为 null
-            const sanitized = sm[1]
-              .replace(/undefined/g, "null")
-              .replace(/NaN/g, "null")
-              .replace(/Infinity/g, "null");
-            const data = JSON.parse(sanitized);
-            logs.push(`小红书: ✅ __INITIAL_STATE__ 解析成功 (keys: ${Object.keys(data).slice(0, 8).join(", ")})`);
-            // XHS 把笔记数据放在 global.note 或 note 下
-            const note = data.note || data.noteDetail || data.noteInfo
-              || data.global?.note || data.global?.noteDetail
-              || data.serverData?.note || data.pageData?.note;
-            if (note) {
-              logs.push(`小红书: 找到 note 数据`);
-              return formatXhsResponse(note);
-            }
-            // 深度搜索（放宽条件：只搜 noteId 和 imageList）
-            const found = deepFind(data, ["noteId", "imageList", "video", "user"]);
-            if (found) {
-              logs.push(`小红书: 深度搜索找到笔记数据`);
-              return formatXhsResponse(found);
-            }
-            // 打印子对象的 keys 帮助定位
-            logs.push(`小红书: 数据中未找到 note，展开子对象:`);
-            for (const k of Object.keys(data).slice(0, 6)) {
-              const v = data[k];
-              if (v && typeof v === "object" && !Array.isArray(v)) {
-                const subKeys = Object.keys(v).slice(0, 8).join(", ");
-                logs.push(`  ${k} → { ${subKeys} }`);
-                // 深入一层
-                for (const sk of Object.keys(v).slice(0, 4)) {
-                  const sv = v[sk];
-                  if (sv && typeof sv === "object" && !Array.isArray(sv)) {
-                    const ssk = Object.keys(sv).slice(0, 6).join(", ");
-                    if (ssk.includes("note") || ssk.includes("Note") || ssk.includes("image") || ssk.includes("title")) {
-                      logs.push(`    ${k}.${sk} → { ${ssk} } ← 候选`);
-                    }
-                  }
+      // === 提取方式1: __INITIAL_STATE__（括号计数法） ===
+      const initIdx = html.indexOf("__INITIAL_STATE__");
+      if (initIdx >= 0) {
+        const afterEq = html.substring(html.indexOf("=", initIdx) + 1);
+        const openBrace = afterEq.indexOf("{");
+        if (openBrace >= 0) {
+          // 括号计数法找到匹配的 }
+          let depth = 0, inStr = false, esc = false, strChar = "";
+          let endIdx = -1;
+          for (let i = openBrace; i < afterEq.length; i++) {
+            const ch = afterEq[i];
+            if (esc) { esc = false; continue; }
+            if (ch === "\\") { esc = true; continue; }
+            if (inStr) { if (ch === strChar) inStr = false; continue; }
+            if (ch === '"' || ch === "'") { inStr = true; strChar = ch; continue; }
+            if (ch === "{") depth++;
+            else if (ch === "}") { depth--; if (depth === 0) { endIdx = i; break; } }
+          }
+          if (endIdx >= 0) {
+            const jsonStr = afterEq.substring(openBrace, endIdx + 1);
+            logs.push(`小红书: 括号计数提取JSON (${jsonStr.length} 字符)`);
+            try {
+              const sanitized = jsonStr
+                .replace(/undefined/g, "null")
+                .replace(/NaN/g, "null")
+                .replace(/Infinity/g, "null");
+              const data = JSON.parse(sanitized);
+              logs.push(`小红书: ✅ JSON解析成功 (keys: ${Object.keys(data).slice(0, 8).join(", ")})`);
+              const note = data.note || data.noteDetail || data.noteInfo
+                || data.global?.note || data.global?.noteDetail
+                || data.serverData?.note || data.pageData?.note;
+              if (note) { logs.push("小红书: 找到 note 数据"); return formatXhsResponse(note); }
+              const found = deepFind(data, ["noteId", "imageList", "video", "user"]);
+              if (found) { logs.push("小红书: 深度搜索找到笔记数据"); return formatXhsResponse(found); }
+              // 打印结构帮助定位
+              logs.push(`小红书: 未找到note，展开结构:`);
+              for (const k of Object.keys(data).slice(0, 6)) {
+                const v = data[k];
+                if (v && typeof v === "object" && !Array.isArray(v)) {
+                  logs.push(`  ${k} → { ${Object.keys(v).slice(0, 8).join(", ")} }`);
                 }
               }
+            } catch (e) {
+              logs.push(`小红书: JSON解析失败: ${e.message}`);
+              logs.push(`小红书: JSON前100字: ${jsonStr.substring(0, 100)}`);
+              logs.push(`小红书: JSON后100字: ${jsonStr.substring(Math.max(0, jsonStr.length - 100))}`);
             }
-          } catch (e) {
-            logs.push(`小红书: __INITIAL_STATE__ JSON解析失败: ${e.message}`);
           }
         }
       }
