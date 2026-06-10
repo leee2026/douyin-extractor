@@ -421,9 +421,9 @@
 <body>
   <!-- ===== 头部 ===== -->
   <div class="header">
-    <span class="icon">🎵</span>
-    <h1>抖音无水印提取</h1>
-    <p>粘贴分享链接，一键下载无水印视频和图集</p>
+    <span class="icon">📱</span>
+    <h1>社交媒体内容提取</h1>
+    <p>粘贴分享链接，一键下载无水印内容</p>
   </div>
 
   <!-- ===== 输入区域 ===== -->
@@ -433,7 +433,7 @@
         <input
           id="urlInput"
           type="text"
-          placeholder="粘贴抖音分享链接..."
+          placeholder="粘贴抖音 / 小红书分享链接..."
           autocomplete="off"
           autocorrect="off"
           autocapitalize="off"
@@ -447,8 +447,8 @@
       </button>
     </div>
     <p class="hint">
-      支持抖音视频和图集 · 自动去除水印<br />
-      示例：打开抖音 App → 分享 → 复制链接 → 粘贴到这里
+      🎵 抖音：视频 · 图集 · 无水印 &nbsp;|&nbsp; 📕 小红书：图文 · 视频<br />
+      打开 App → 分享 → 复制链接 → 粘贴到这里
     </p>
   </div>
 
@@ -547,21 +547,32 @@
       downloadBtn.addEventListener("click", handleDownload);
       copyUrlBtn.addEventListener("click", handleCopyUrl);
 
-      // ===== 从文本中提取抖音链接 =====
-      function extractDouyinUrl(text) {
+      // ===== 从文本中提取链接 =====
+      function extractUrl(text) {
         if (!text) return "";
-        // 匹配抖音短链接: https://v.douyin.com/xxxxx/
-        let m = text.match(/https?:\/\/v\.douyin\.com\/[a-zA-Z0-9\/?=&_-]+/);
+        // 抖音短链接
+        let m = text.match(/https?:\/\/v\.douyin\.com\/[a-zA-Z0-9/?=&_%.-]+/);
         if (m) return m[0];
-        // 匹配抖音完整链接: https://www.douyin.com/video/xxxxx 或 /note/xxxxx
-        m = text.match(/https?:\/\/www\.douyin\.com\/(?:video|note)\/\d+/);
+        // 抖音完整链接
+        m = text.match(/https?:\/\/(?:www\.)?douyin\.com\/(?:video|note|user)\/[a-zA-Z0-9/?=&_%.-]+/);
         if (m) return m[0];
-        // 匹配 iesdouyin 链接
-        m = text.match(/https?:\/\/www\.iesdouyin\.com\/[a-zA-Z0-9\/?=&_-]+/);
+        // iesdouyin
+        m = text.match(/https?:\/\/(?:www\.)?iesdouyin\.com\/[a-zA-Z0-9/?=&_%.-]+/);
         if (m) return m[0];
-        // 匹配不带 www 的 douyin.com
-        m = text.match(/https?:\/\/douyin\.com\/[a-zA-Z0-9\/?=&_-]+/);
+        // 小红书短链接
+        m = text.match(/https?:\/\/xhslink\.com\/[a-zA-Z0-9/?=&_%.-]+/);
         if (m) return m[0];
+        // 小红书完整链接
+        m = text.match(/https?:\/\/(?:www\.)?xiaohongshu\.com\/[a-zA-Z0-9/?=&_%.-]+/);
+        if (m) return m[0];
+        // 如果本身就以 http 开头
+        if (/^https?:\/\//.test(text.trim())) return text.trim();
+        return "";
+      }
+
+      function detectPlatform(url) {
+        if (/douyin\.com|iesdouyin\.com/i.test(url)) return "douyin";
+        if (/xiaohongshu\.com|xhslink\.com/i.test(url)) return "xiaohongshu";
         return "";
       }
 
@@ -570,16 +581,10 @@
         try {
           const text = await navigator.clipboard.readText();
           if (text) {
-            // 自动从分享文案中提取链接
-            const url = extractDouyinUrl(text);
-            if (url) {
-              urlInput.value = url;
-            } else {
-              urlInput.value = text.trim();
-            }
+            const url = extractUrl(text);
+            urlInput.value = url || text.trim();
           }
         } catch {
-          // 剪贴板 API 不可用时，聚焦输入框让用户手动粘贴
           urlInput.focus();
           urlInput.select();
         }
@@ -589,34 +594,31 @@
       window.addEventListener("load", async () => {
         try {
           const text = await navigator.clipboard.readText();
-          if (text && /douyin\.com|iesdouyin\.com/i.test(text)) {
-            // 自动提取链接
-            const url = extractDouyinUrl(text);
-            urlInput.value = url || text.trim();
+          if (text) {
+            const url = extractUrl(text);
+            if (url) urlInput.value = url;
           }
-        } catch {
-          // 静默失败
-        }
+        } catch {}
       });
 
       // ===== 提交解析 =====
       async function handleSubmit() {
         let url = urlInput.value.trim();
 
-        // 自动从粘贴的文案中提取抖音链接
-        const extracted = extractDouyinUrl(url);
+        // 自动从粘贴的文案中提取链接
+        const extracted = extractUrl(url);
         if (extracted) {
           url = extracted;
-          urlInput.value = url; // 修正输入框显示
+          urlInput.value = url;
         }
 
         if (!url) {
-          showError("请先粘贴抖音分享链接\n\n（在抖音 App 里点分享→复制链接，然后回到这里点粘贴）");
+          showError("请先粘贴分享链接\n\n（在 App 里点分享→复制链接，然后回到这里点粘贴）");
           return;
         }
 
-        if (!/douyin\.com|iesdouyin\.com/i.test(url)) {
-          showError("未识别到抖音链接，请重新复制\n\n确保链接包含 douyin.com");
+        if (!detectPlatform(url)) {
+          showError("未识别到支持的链接\n\n目前支持：\n• 抖音（douyin.com）\n• 小红书（xiaohongshu.com）");
           return;
         }
 
@@ -657,26 +659,29 @@
       function renderResult(data) {
         resultCard.classList.add("show");
 
+        // 平台标识
+        const platformLabel = data.platform === "xiaohongshu" ? "📕 小红书" : "🎵 抖音";
+
         // 作者信息
         authorAvatar.src = data.author?.avatar || "";
-        authorAvatar.onerror = function () {
-          this.style.display = "none";
-        };
-        authorName.textContent = data.author?.nickname || "未知用户";
-        authorId.textContent = data.author?.unique_id
-          ? "@" + data.author.unique_id
-          : "";
+        authorAvatar.onerror = function () { this.style.display = "none"; };
+        authorName.textContent = `${platformLabel} · ${data.author?.nickname || "未知用户"}`;
+        authorId.textContent = data.author?.uid
+          ? "@" + data.author.uid
+          : (data.author?.unique_id ? "@" + data.author.unique_id : "");
 
-        // 统计
-        statLikes.textContent = formatCount(data.statistics?.likes || 0);
-        statComments.textContent = formatCount(data.statistics?.comments || 0);
-        statShares.textContent = formatCount(data.statistics?.shares || 0);
+        // 统计（兼容新旧格式）
+        const stats = data.stats || data.statistics || {};
+        statLikes.textContent = formatCount(stats.likes || 0);
+        statComments.textContent = formatCount(stats.comments || 0);
+        statShares.textContent = formatCount(stats.shares || 0);
 
         // 描述
-        descText.textContent = data.desc || "";
-        descText.style.display = data.desc ? "" : "none";
+        const desc = data.desc || data.title || "";
+        descText.textContent = desc;
+        descText.style.display = desc ? "" : "none";
 
-        // 根据类型渲染不同内容
+        // 根据类型渲染
         if (data.type === "video") {
           renderVideo(data);
         } else {
@@ -691,7 +696,13 @@
           musicRow.style.display = "none";
         }
 
-        // 滚动到结果
+        // 标签
+        if (data.tags && data.tags.length > 0) {
+          musicRow.style.display = "flex";
+          musicInfo.textContent = `🏷 ${data.tags.join(" · ")}`;
+          if (!data.music?.title) musicRow.querySelector(".music-icon").textContent = "🏷";
+        }
+
         resultCard.scrollIntoView({ behavior: "smooth", block: "start" });
       }
 
@@ -700,29 +711,22 @@
         videoWrapper.style.display = "block";
         imageGallery.style.display = "none";
 
-        const v = data.video;
-        videoPlayer.innerHTML = ""; // 清空
+        // 视频地址（兼容新旧字段名）
+        const videoUrl = data.videoUrl || data.video?.url || "";
+        const cover = data.cover || data.video?.cover || "";
 
-        // 主视频源
+        videoPlayer.innerHTML = "";
         const source = document.createElement("source");
-        source.src = v.url;
+        source.src = videoUrl;
         source.type = "video/mp4";
         videoPlayer.appendChild(source);
 
-        // 封面
-        if (v.cover) {
-          videoPlayer.poster = v.cover;
-        }
-
+        if (cover) videoPlayer.poster = cover;
         videoPlayer.load();
 
-        // 下载链接
-        currentDownloadUrl = v.url;
-
-        // 更新下载按钮
+        currentDownloadUrl = videoUrl;
         downloadBtn.textContent = "📥 下载视频";
-        saveTip.innerHTML =
-          '💡 点击"下载视频"后，<strong>长按视频</strong>即可保存到相册';
+        saveTip.innerHTML = '💡 点击"下载视频"后，<strong>长按视频</strong>即可保存到相册';
       }
 
       // ===== 渲染图集 =====
@@ -732,8 +736,8 @@
         imageGallery.innerHTML = "";
 
         const images = data.images || [];
+        const platform = data.platform || "";
 
-        // 根据数量调整网格
         if (images.length === 1) {
           imageGallery.classList.add("single");
         } else {
@@ -745,50 +749,47 @@
           item.className = "image-item";
 
           const imgEl = document.createElement("img");
-          imgEl.src = img.url || img.thumbnail;
+          imgEl.src = img.url || img.thumb || img.thumbnail || "";
           imgEl.alt = `图片 ${index + 1}`;
           imgEl.loading = "lazy";
           item.appendChild(imgEl);
 
-          // 单个图片的下载按钮
           const dlBtn = document.createElement("button");
           dlBtn.className = "img-download";
           dlBtn.textContent = "⬇";
           dlBtn.title = `下载第 ${index + 1} 张图片`;
           dlBtn.addEventListener("click", (e) => {
             e.stopPropagation();
-            downloadFile(img.url, `douyin_img_${index + 1}.jpg`);
+            downloadFile(img.url, `${platform}_img_${index + 1}.jpg`);
           });
           item.appendChild(dlBtn);
 
-          // 点击图片查看大图
           item.addEventListener("click", () => {
-            downloadFile(img.url, `douyin_img_${index + 1}.jpg`);
+            downloadFile(img.url, `${platform}_img_${index + 1}.jpg`);
           });
 
           imageGallery.appendChild(item);
         });
 
-        // 下载按钮：下载当前显示的全部图片
         currentDownloadUrl = images[0]?.url || "";
         downloadBtn.textContent = `📥 下载全部图片 (${images.length}张)`;
-        saveTip.innerHTML =
-          "💡 点击图片即可保存单张 · 点击下方按钮打包下载<br />手机端建议逐张<strong>长按图片</strong>保存";
+        saveTip.innerHTML = "💡 点击图片即可保存单张 · 点击下方按钮打包下载<br />手机端建议逐张<strong>长按图片</strong>保存";
       }
 
       // ===== 下载处理 =====
       function handleDownload() {
         if (!currentData) return;
 
+        const prefix = currentData.platform || "media";
+
         if (currentData.type === "video") {
-          downloadFile(currentDownloadUrl, "douyin_video.mp4");
+          downloadFile(currentDownloadUrl, `${prefix}_video.mp4`);
         } else {
-          // 图集：逐张下载
           const images = currentData.images || [];
           images.forEach((img, i) => {
             setTimeout(() => {
-              downloadFile(img.url, `douyin_img_${i + 1}.jpg`);
-            }, i * 500); // 间隔 500ms 避免浏览器拦截
+              downloadFile(img.url, `${prefix}_img_${i + 1}.jpg`);
+            }, i * 500);
           });
           if (images.length > 1) {
             alert(`将依次下载 ${images.length} 张图片，请允许浏览器多次下载`);
