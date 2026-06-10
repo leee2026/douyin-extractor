@@ -1,0 +1,18 @@
+{
+  "envId": "{{your-env-id}}",
+  "functionRoot": "./functions",
+  "functions": [
+    {
+      "name": "parse",
+      "timeout": 30,
+      "runtime": "Nodejs18.15",
+      "memorySize": 512,
+      "handler": "index.main"
+    }
+  ],
+  "region": "ap-shanghai",
+  "staticHosting": {
+    "rootPath": "./",
+    "ignore": ["functions", "api", "node_modules", ".git"]
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "douyin-xhs-extractor-parse",
+  "version": "1.0.0",
+  "description": "社交媒体内容提取 - 云函数",
+  "main": "index.js",
+  "dependencies": {}
+}
